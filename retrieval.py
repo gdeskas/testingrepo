@@ -2,10 +2,21 @@ def retrieve_similar_chunks(
     complaint_id: str,
     query_text: Optional[str] = None,
     k: int = 10,
-    return_full_complaints: bool = False
+    return_full_complaints: bool = False,
+    exclude_duplicates: bool = True
 ) -> List[Tuple[str, float, str, Dict]]:
     """
     Retrieve similar chunks using Mosaic AI Vector Search REST API.
+    
+    Args:
+        complaint_id: The complaint ID to find similar items for
+        query_text: Optional custom query text
+        k: Number of results to return
+        return_full_complaints: If True, return full complaint documents
+        exclude_duplicates: If True, filter out chunks marked as duplicates
+    
+    Returns:
+        List of (complaint_id, score, text, metadata) tuples
     """
     # Build query vector
     if query_text is not None:
@@ -22,6 +33,9 @@ def retrieve_similar_chunks(
         q_vec = embeddings[q_idx].tolist()
     
     # Call Vector Search REST API
+    # Request more results if filtering duplicates
+    search_k = k * 5 if exclude_duplicates else k * 2
+    
     url = f"{WORKSPACE_URL}/api/2.0/vector-search/indexes/{VECTOR_SEARCH_INDEX}/query"
     
     headers = {
@@ -31,7 +45,7 @@ def retrieve_similar_chunks(
     
     payload = {
         "query_vector": q_vec,
-        "num_results": k * 2,  # Get extra to allow filtering
+        "num_results": search_k,
         "columns": ["chunk_id", "complaint_id", "section", "chunk_index", "chunk_text"]
     }
     
@@ -48,6 +62,10 @@ def retrieve_similar_chunks(
     for row in results_raw.get("result", {}).get("data_array", []):
         # Columns returned in order: chunk_id, complaint_id, section, chunk_index, chunk_text, score
         chunk_id, chunk_cid, section, chunk_idx, text, score = row
+        
+        # Skip duplicates if requested
+        if exclude_duplicates and int(chunk_id) in duplicate_exclusion_set:
+            continue
         
         # Skip chunks from the source complaint
         if chunk_cid == complaint_id:
