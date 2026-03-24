@@ -75,11 +75,7 @@ PROMPT_CATALOGUE = {
         "prompt_type": "text_categorisation",  # PROMPT_TYPE in current_prompt table
         "task_type": "classification",
         "source_table": "eval_snap_doc_category",
-        "source_filter": """
-            CONTEXT_PARSED IS NOT NULL
-            AND length(CONTEXT_PARSED) > 10
-            AND lower(FILE_EXT) NOT IN ('png', 'jpg', 'jpeg', 'bmp', 'gif')
-        """,
+        "source_filter": "CONTEXT_PARSED IS NOT NULL AND length(CONTEXT_PARSED) > 10",
         "text_column": "CONTEXT_PARSED",
         "id_columns": ["PROPOSAL_ID", "DOCUMENT_ID", "FILE_NAME"],
         "output_fields": [
