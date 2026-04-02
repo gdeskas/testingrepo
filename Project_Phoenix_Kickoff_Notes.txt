@@ -1,0 +1,98 @@
+═══════════════════════════════════════════════════════════════
+ PROJECT PHOENIX — Kick-off Meeting Notes
+ Date:   Wednesday, 25 March 2026, 10:00–11:30 GMT
+ Venue:  Room 4.12, Brunel House, Bristol  (+ MS Teams)
+ Chair:  Sarah Patel (Programme Director)
+═══════════════════════════════════════════════════════════════
+
+ATTENDEES
+─────────
+In-person:  Sarah Patel, James Okonkwo, Hannah Liu, Tom Archer,
+            Priya Sharma, Marcus Webb
+Remote:     Anika Johansson (Stockholm), Ravi Desai (Mumbai),
+            Claire O'Sullivan (Dublin)
+Apologies:  Ben Griffiths (annual leave)
+
+───────────────────────────────────────────────────────────────
+1. BACKGROUND & OBJECTIVES
+───────────────────────────────────────────────────────────────
+Sarah opened the meeting with an overview of the Phoenix
+programme. The core objective is to migrate the legacy
+customer-management platform (Heron v3.2) to a modern,
+cloud-native architecture by Q4 2026.
+
+Key drivers:
+  • Heron v3.2 reaches end-of-vendor-support in Jan 2027
+  • Current system cannot scale beyond ~80k concurrent users
+  • GDPR data-residency requirements not met for EU customers
+  • Annual maintenance cost has risen 34% YoY
+
+Target state: containerised microservices on AWS EKS, with
+PostgreSQL (RDS) replacing the existing Oracle estate.
+
+───────────────────────────────────────────────────────────────
+2. WORKSTREAMS & LEADS
+───────────────────────────────────────────────────────────────
+WS1  Data Migration          — Ravi Desai
+WS2  API & Services Layer    — James Okonkwo
+WS3  Front-end Redesign      — Hannah Liu
+WS4  Infrastructure & DevOps — Marcus Webb
+WS5  Testing & QA            — Priya Sharma
+WS6  Change Management       — Claire O'Sullivan
+
+───────────────────────────────────────────────────────────────
+3. KEY MILESTONES
+───────────────────────────────────────────────────────────────
+M1   Architecture sign-off          28 Apr 2026
+M2   Data migration pilot (10%)     30 May 2026
+M3   API gateway live (staging)     18 Jul 2026
+M4   UAT environment ready          05 Sep 2026
+M5   Full data cut-over             10 Oct 2026
+M6   Go-live (phased rollout)       17 Nov 2026
+M7   Heron decommission             31 Jan 2027
+
+───────────────────────────────────────────────────────────────
+4. RISKS & ISSUES
+───────────────────────────────────────────────────────────────
+R1  Oracle → PostgreSQL schema incompatibilities
+    Likelihood: High  |  Impact: High
+    Mitigation: Ravi to run pgLoader proof-of-concept by 11 Apr
+
+R2  Vendor dependency on DataBridge Ltd for ETL tooling
+    Likelihood: Medium  |  Impact: Medium
+    Mitigation: Evaluate open-source alternatives (Apache NiFi)
+
+R3  Resource contention — Marcus also committed to Ops BAU
+    Likelihood: High  |  Impact: Medium
+    Mitigation: Sarah to escalate with CTO for dedicated capacity
+
+R4  EU data-residency compliance during migration window
+    Likelihood: Low  |  Impact: High
+    Mitigation: Claire to engage Legal & DPO by end of March
+
+───────────────────────────────────────────────────────────────
+5. ACTIONS
+───────────────────────────────────────────────────────────────
+#   Action                                  Owner       Due
+──  ──────────────────────────────────────  ──────────  ──────────
+A1  Circulate draft architecture doc        James O.    01 Apr 2026
+A2  pgLoader PoC on sample dataset          Ravi D.     11 Apr 2026
+A3  Confirm AWS account & IAM setup         Marcus W.   04 Apr 2026
+A4  Schedule UX discovery workshops         Hannah L.   08 Apr 2026
+A5  Draft comms plan for affected teams     Claire O'S. 11 Apr 2026
+A6  Escalate resourcing ask to CTO          Sarah P.    28 Mar 2026
+A7  Set up Jira board & Confluence space    Tom A.      28 Mar 2026
+
+───────────────────────────────────────────────────────────────
+6. AOB
+───────────────────────────────────────────────────────────────
+Anika raised the question of Swedish data-residency rules
+(beyond GDPR). Sarah agreed this should be folded into R4.
+
+Tom asked about budget codes — Sarah confirmed Phoenix has
+its own cost centre (CC-4817) from 1 April.
+
+───────────────────────────────────────────────────────────────
+NEXT MEETING:  Wednesday 8 April 2026, 10:00 GMT
+───────────────────────────────────────────────────────────────
+Minutes taken by Tom Archer.  Distributed 25/03/2026.

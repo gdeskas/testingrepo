@@ -1,0 +1,124 @@
+═══════════════════════════════════════════════════════════════
+ HEALTH & SAFETY COMMITTEE — Monthly Meeting
+ Date:   Wednesday, 26 March 2026, 13:00–14:15 GMT
+ Venue:  Meeting Room 2, Avonmouth Depot, Bristol BS11 9QD
+ Chair:  Karen Fletcher (H&S Manager)
+═══════════════════════════════════════════════════════════════
+
+ATTENDEES
+─────────
+Karen Fletcher (H&S Manager), Mike Bowen (Depot Manager),
+Steve Rawlings (Union Rep — Unite), Angela Pryce (HR),
+Darren Hicks (Shift Supervisor — Days), Tanya Novak (Shift
+Supervisor — Nights), Phil Osborne (Maintenance Lead)
+
+Apologies: None
+
+───────────────────────────────────────────────────────────────
+1. REVIEW OF PREVIOUS MINUTES & ACTIONS
+───────────────────────────────────────────────────────────────
+Minutes of 26 February 2026 approved without amendment.
+
+Outstanding actions:
+  A-0226-03  Replace damaged forklift mirror (Bay 4)
+             Status: COMPLETED 04/03/2026 by Phil O.
+  A-0226-05  Order replacement hi-vis vests (50 units)
+             Status: COMPLETED. Delivered 10/03/2026.
+  A-0226-07  Re-certify overhead crane (Unit 3)
+             Status: OVERDUE. Scheduled for 02/04/2026.
+             Karen noted this is a legal requirement and
+             the crane must not be used until re-certified.
+
+───────────────────────────────────────────────────────────────
+2. ACCIDENT & INCIDENT REPORT — MARCH 2026
+───────────────────────────────────────────────────────────────
+Total incidents:         4  (Feb: 6)
+RIDDOR reportable:       0  (Feb: 0)
+Lost time injuries:      1  (Feb: 1)
+Near misses reported:   11  (Feb: 8)
+
+Detail of lost time injury:
+  Date:     14 March 2026
+  Employee: [Name redacted] — Warehouse Operative
+  Detail:   Slip on wet floor in loading bay during rain.
+            Sustained sprained ankle. 3 days off work.
+  Root cause: Drainage gully blocked with debris. Floor
+            wet for ~2 hours before the incident.
+  Action:   Weekly drain checks added to cleaning schedule.
+            Anti-slip mats ordered for loading bay entrance.
+
+Karen praised the increase in near-miss reporting (up 38%
+since the awareness campaign launched in January). Steve
+echoed this and noted that operatives feel more comfortable
+reporting since the anonymous submission box was introduced.
+
+───────────────────────────────────────────────────────────────
+3. FIRE SAFETY UPDATE
+───────────────────────────────────────────────────────────────
+Fire drill conducted 20 March. Full evacuation in 3 min 42s
+(target: <4 min). Mike noted two employees in the canteen did
+not hear the alarm. Phil confirmed the sounder in that zone
+was found to be faulty and has been replaced.
+
+Annual fire risk assessment due May 2026. Karen to book the
+assessor (Vulcan Fire Safety Ltd) by end of April.
+
+───────────────────────────────────────────────────────────────
+4. DSE & ERGONOMICS
+───────────────────────────────────────────────────────────────
+Angela reported that 12 DSE assessments were completed in
+March for office-based staff. 3 employees required adjustments:
+  • 2 x monitor risers ordered (delivered)
+  • 1 x ergonomic chair (on order — ETA 2 weeks)
+
+Tanya raised that night shift operatives working at the new
+packing stations have complained of lower back pain. Karen
+agreed to conduct a manual handling assessment of the new
+stations by 10 April.
+
+───────────────────────────────────────────────────────────────
+5. TRAINING
+───────────────────────────────────────────────────────────────
+Completed in March:
+  • Forklift refresher — 8 operatives (all passed)
+  • COSHH awareness — 22 staff (mandatory annual)
+  • First aid at work (3-day) — 4 new first aiders
+
+Upcoming:
+  • Manual handling refresher — all warehouse staff, April
+  • Working at height — 6 staff booked, 15 April
+
+Steve asked about fire warden training. Karen confirmed 4
+new wardens are booked on the next course (22 April).
+
+───────────────────────────────────────────────────────────────
+6. NEW ACTIONS
+───────────────────────────────────────────────────────────────
+#           Action                            Owner     Due
+──────────  ────────────────────────────────  ────────  ──────────
+A-0326-01   Ensure crane re-cert completed    Phil O.   02 Apr
+A-0326-02   Anti-slip mats for loading bay    Karen F.  04 Apr
+A-0326-03   Manual handling assessment —      Karen F.  10 Apr
+            new packing stations
+A-0326-04   Book fire risk assessment         Karen F.  30 Apr
+A-0326-05   Night shift lighting audit        Darren H. 14 Apr
+            (Tanya reported dim areas in
+            aisle 7–9)
+
+───────────────────────────────────────────────────────────────
+7. AOB
+───────────────────────────────────────────────────────────────
+Steve raised the temperature in the warehouse — several
+operatives have reported it being very cold during the
+early morning shift (04:00–06:00). Phil confirmed the
+heating timers are set to come on at 05:30; he will bring
+them forward to 04:00 starting next week.
+
+Mike reminded everyone that the HSE inspector visit is
+expected in Q2 2026 (unannounced). All documentation to be
+audit-ready by end of April.
+
+───────────────────────────────────────────────────────────────
+NEXT MEETING:  Wednesday 30 April 2026, 13:00, Avonmouth
+───────────────────────────────────────────────────────────────
+Minutes taken by Karen Fletcher.  Distributed 27/03/2026.
