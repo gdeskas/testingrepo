@@ -122,7 +122,7 @@ PROMPT_CATALOGUE = {
         "candidates"      : VISION_CANDIDATES,
         "judge_endpoint"  : VISION_JUDGE_ENDPOINT,
         "judge_label"     : VISION_JUDGE_LABEL,
-        "source_table"    : "files_loaded",
+        "source_table"    : "eval_snap_files_loaded",
         "source_filter"   : "FILE_EXT IN ('png','jpg','jpeg','bmp','gif')",
         "id_columns"      : ["FILE_ID"],
         "input_column"    : "CONTENT",          # binary image
@@ -142,7 +142,7 @@ PROMPT_CATALOGUE = {
         "candidates"      : TEXT_CANDIDATES,
         "judge_endpoint"  : TEXT_JUDGE_ENDPOINT,
         "judge_label"     : TEXT_JUDGE_LABEL,
-        "source_table"    : "extracted_text",
+        "source_table"    : "eval_snap_text_extract",
         "source_filter"   : "TEXT IS NOT NULL",
         "id_columns"      : ["FILE_ID"],
         "input_column"    : "TEXT",
@@ -162,7 +162,7 @@ PROMPT_CATALOGUE = {
         "candidates"      : TEXT_CANDIDATES,
         "judge_endpoint"  : TEXT_JUDGE_ENDPOINT,
         "judge_label"     : TEXT_JUDGE_LABEL,
-        "source_table"    : "doc_category",
+        "source_table"    : "eval_snap_doc_category",
         "source_filter"   : "CATEGORY = 'asset_image'",
         "id_columns"      : ["FILE_ID"],
         "input_column"    : "CONTEXT_PARSED",
@@ -182,7 +182,7 @@ PROMPT_CATALOGUE = {
         "candidates"      : TEXT_CANDIDATES,
         "judge_endpoint"  : TEXT_JUDGE_ENDPOINT,
         "judge_label"     : TEXT_JUDGE_LABEL,
-        "source_table"    : "doc_category",
+        "source_table"    : "eval_snap_doc_category",
         "source_filter"   : "CATEGORY = 'proposal'",
         "id_columns"      : ["PROPOSAL_ID", "FILE_ID"],
         "input_column"    : "CONTEXT_PARSED",
@@ -224,7 +224,7 @@ PROMPT_CATALOGUE = {
         "candidates"      : TEXT_CANDIDATES,
         "judge_endpoint"  : TEXT_JUDGE_ENDPOINT,
         "judge_label"     : TEXT_JUDGE_LABEL,
-        "source_table"    : "doc_category",
+        "source_table"    : "eval_snap_doc_category",
         "source_filter"   : "CATEGORY IN ('proposal','email_body_with_proposal_details')",
         "id_columns"      : ["PROPOSAL_ID", "FILE_ID"],
         "input_column"    : "CONTEXT_PARSED",
@@ -245,7 +245,7 @@ PROMPT_CATALOGUE = {
         "candidates"      : TEXT_CANDIDATES,
         "judge_endpoint"  : TEXT_JUDGE_ENDPOINT,
         "judge_label"     : TEXT_JUDGE_LABEL,
-        "source_table"    : "doc_category",
+        "source_table"    : "eval_snap_doc_category",
         "source_filter"   : "CATEGORY IN ('proposal','email_body_with_proposal_details','id')",
         "id_columns"      : ["PROPOSAL_ID", "FILE_ID"],
         "input_column"    : "CONTEXT_PARSED",
@@ -310,6 +310,32 @@ print(f"\nLoaded {len(prompt_configs)} prompt configs.")
 
 # MAGIC %md
 # MAGIC ## 4. Load Evaluation Documents
+# MAGIC
+# MAGIC Reads from the `eval_snap_*` tables produced by `eval_00_pipeline_orchestrator`.
+# MAGIC If any source table is missing, the cell below will tell you to run `eval_00` first.
+
+# COMMAND ----------
+
+# DBTITLE 1,Pre-flight — check eval_snap_* tables exist
+missing_tables = []
+for prompt_type, cfg in PROMPT_CATALOGUE.items():
+    if prompt_type not in prompt_configs:
+        continue
+    src = f"`{catalog}`.`{slr_schema}`.{cfg['source_table']}"
+    try:
+        spark.table(src).limit(1).collect()
+    except Exception as e:
+        missing_tables.append((prompt_type, cfg['source_table'], str(e)[:120]))
+
+if missing_tables:
+    print("ERROR — the following snapshot tables are missing or unreadable:")
+    for pt, t, err in missing_tables:
+        print(f"  {pt:<45s} → {t}  ({err})")
+    raise RuntimeError(
+        "Snapshot tables are missing. Run `eval_00_pipeline_orchestrator` first "
+        "to materialise the eval_snap_* tables, then re-run this notebook."
+    )
+print("✓ All required snapshot tables exist.")
 
 # COMMAND ----------
 
