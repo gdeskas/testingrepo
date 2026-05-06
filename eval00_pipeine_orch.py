@@ -27,9 +27,9 @@
 # COMMAND ----------
 
 # DBTITLE 1,Widgets
-dbutils.widgets.text("catalog",    "comm-afl-dev",     "Catalog")
-dbutils.widgets.text("brz_schema", "brkrflw-lkh-brz",  "Bronze Schema")
-dbutils.widgets.text("slr_schema", "brkrflw-lkh-slr",  "Silver Schema")
+dbutils.widgets.text("catalog",    "uc_comm_afl_dev",     "Catalog")
+dbutils.widgets.text("brz_schema", "brkrflw_brz",  "Bronze Schema")
+dbutils.widgets.text("slr_schema", "brkrflw_slr",  "Silver Schema")
 dbutils.widgets.text("job_run_id", "",                 "Job Run ID")
 
 catalog    = dbutils.widgets.get("catalog")
@@ -99,20 +99,20 @@ for i, vr in enumerate(VOLUME_ROOTS, 1):
 # COMMAND ----------
 
 # DBTITLE 1,Pipeline notebook paths and staging config
-STAGING_ROOT  = "dbfs:/Volumes/comm-afl-dev/brkrflw-lkh-brz/staging_files"
-WORKING_TABLE = "files_loaded"   # Bronze table the pipeline writes to (overwrite)
+STAGING_ROOT  = "dbfs:/Volumes/uc_comm_afl_dev/brkrflw_brz/staging_files"
+WORKING_TABLE = "gdfiles_loaded"   # Bronze table the pipeline writes to (overwrite)
 
 # Pipeline notebooks — execution order
 PIPELINE_NOTEBOOKS = [
-    ("/Workspace/CNTRL-COMM-AFL-DEV/Pipeline/Utilities/date_functions",                                "date_functions"),
-    ("/Workspace/CNTRL-COMM-AFL-DEV/gd_Proposal_Load/Silver/01.silver_ddl",                            "silver_ddl"),
-    ("/Workspace/CNTRL-COMM-AFL-DEV/gd_Proposal_Load/Silver/02.extract_text",                          "extract_text"),
-    ("/Workspace/CNTRL-COMM-AFL-DEV/gd_Proposal_Load/Silver/03.categorise_image",                      "categorise_image"),
-    ("/Workspace/CNTRL-COMM-AFL-DEV/gd_Proposal_Load/Silver/04.categorise_other_doc_type",             "categorise_doc"),
-    ("/Workspace/CNTRL-COMM-AFL-DEV/gd_Proposal_Load/Silver/05.classify_asset",                        "classify_asset"),
-    ("/Workspace/CNTRL-COMM-AFL-DEV/gd_Proposal_Load/Silver/06.extract_account_proposal_information",  "extract_proposal"),
-    ("/Workspace/CNTRL-COMM-AFL-DEV/gd_Proposal_Load/Silver/07.extract_corporate_party_identify_role", "extract_corp_party"),
-    ("/Workspace/CNTRL-COMM-AFL-DEV/gd_Proposal_Load/Silver/08.extract_person_party_identify_role",    "extract_person_party"),
+    ("/Workspace/comm_afl_brkrflw/Proposal_Load/Utilities/date_functions",                                "date_functions"),
+    ("/Workspace/comm_afl_brkrflw/Proposal_Load/Silver/01.silver_ddl",                            "silver_ddl"),
+    ("/Workspace/comm_afl_brkrflw/Proposal_Load/Silver/02.extract_text",                          "extract_text"),
+    ("/Workspace/comm_afl_brkrflw/Proposal_Load/Silver/03.categorise_image",                      "categorise_image"),
+    ("/Workspace/comm_afl_brkrflw/Proposal_Load/Silver/04.categorise_other_doc_type",             "categorise_doc"),
+    ("/Workspace/comm_afl_brkrflw/Proposal_Load/Silver/05.classify_asset",                        "classify_asset"),
+    ("/Workspace/comm_afl_brkrflw/Proposal_Load/Silver/06.extract_account_proposal_information",  "extract_proposal"),
+    ("/Workspace/comm_afl_brkrflw/Proposal_Load/Silver/07.extract_corporate_party_identify_role", "extract_corp_party"),
+    ("/Workspace/comm_afl_brkrflw/Proposal_Load/Silver/08.extract_person_party_identify_role",    "extract_person_party"),
 ]
 
 pipeline_args = {
@@ -145,26 +145,26 @@ print(f"Bronze WT: {WORKING_TABLE}")
 # DBTITLE 1,Snapshot table mapping
 SNAPSHOT_TABLES = {
     # production table       : eval snapshot table
-    "files_loaded"            : "eval_snap_files_loaded",
-    "text_extract"            : "eval_snap_text_extract",
-    "img_category"            : "eval_snap_img_category",
-    "doc_category"            : "eval_snap_doc_category",
-    "asset_extract"           : "eval_snap_asset_extract",
-    "proposals_extract"       : "eval_snap_proposals_extract",
-    "corporate_roles"         : "eval_snap_corporate_roles",
-    "person_roles"            : "eval_snap_person_roles",
+    "gdfiles_loaded"        : "eval_snap_files_loaded",
+    "gdtext_extract"        : "eval_snap_text_extract",
+    "gdimg_category"        : "eval_snap_img_category",
+    "gddoc_category"        : "eval_snap_doc_category",
+    "gdasset_extract"       : "eval_snap_asset_extract",
+    "gdproposals_extract"   : "eval_snap_proposals_extract",
+    "gdcorporate_roles"     : "eval_snap_corporate_party",
+    "gdperson_roles"        : "eval_snap_person_party",
 }
 
-# Note: files_loaded lives in the Bronze schema; everything else in Silver.
+# Note: gdfiles_loaded lives in the Bronze schema; everything else in Silver.
 SNAPSHOT_SCHEMA = {
-    "files_loaded"      : brz_schema,
-    "text_extract"      : brz_schema,   # text_extract appears in both layers
-    "img_category"      : slr_schema,
-    "doc_category"      : slr_schema,
-    "asset_extract"     : slr_schema,
-    "proposals_extract" : slr_schema,
-    "corporate_roles"   : slr_schema,
-    "person_roles"      : slr_schema,
+    "gdfiles_loaded"      : brz_schema,
+    "gdtext_extract"      : brz_schema,   # text_extract appears in both layers
+    "gdimg_category"      : slr_schema,
+    "gddoc_category"      : slr_schema,
+    "gdasset_extract"     : slr_schema,
+    "gdproposals_extract" : slr_schema,
+    "gdcorporate_roles"   : slr_schema,
+    "gdperson_roles"      : slr_schema,
 }
 
 # All snapshots are written to the Silver schema for simplicity.
