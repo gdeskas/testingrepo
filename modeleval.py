@@ -22,8 +22,8 @@
 # COMMAND ----------
 
 # DBTITLE 1,Widgets
-dbutils.widgets.text("catalog", "comm-afl-dev", "Catalog")
-dbutils.widgets.text("slr_schema", "brkrflw-lkh-slr", "Silver Schema")
+dbutils.widgets.text("catalog", "uc_comm_afl_dev", "Catalog")
+dbutils.widgets.text("slr_schema", "brkrflw_slr", "Silver Schema")
 dbutils.widgets.text("eval_schema", "brkrflw-lkh-eval", "Evaluation Schema")
 dbutils.widgets.text("n_runs", "3", "Consistency runs per (model, doc)")
 dbutils.widgets.text("max_docs", "20", "Max documents per prompt")
