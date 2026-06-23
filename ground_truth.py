@@ -1,202 +1,211 @@
 # Databricks notebook source
 # MAGIC %md
-# MAGIC # Ground-truth comparison — DEV scaffold (v2)
+# MAGIC # ground_truth
 # MAGIC
-# MAGIC Builds the online ground-truth diff end-to-end against mock data.
-# MAGIC When real Salesforce access is wired in (Alan's GET pattern + Mithia's snapshot/field-history),
-# MAGIC only the `mock_salesforce_response` function needs to be swapped for the real API call.
-# MAGIC
-# MAGIC **What changed in v2** (after the call with Mithia and the FieldDefinition gap analysis)
-# MAGIC - Per-object **tracked-field config** added — each diff row is now annotated with whether
-# MAGIC   Salesforce has change-history tracking on that field. The change-type classifier (next
-# MAGIC   notebook) needs this to know which fields it can query `AccountHistory` /
-# MAGIC   `OpportunityFieldHistory` against.
-# MAGIC - Known **field-name mismatches** between what the pipeline sends and what Salesforce stores
-# MAGIC   are surfaced explicitly. The biggest open one is `CB_Product__c` (sent) vs
-# MAGIC   `CB_Main_Product__c` (tracked) — flagged as a TODO rather than silently mapped.
-# MAGIC - Compound address fields (`BillingAddress`, `ShippingAddress`) noted as the
-# MAGIC   tracking unit, even though we send and diff at component level.
-# MAGIC - Summary breaks down changes by tracking status, not just status.
-# MAGIC
-# MAGIC **What this notebook still doesn't do** — change-type classification (correction vs
-# MAGIC business-update vs format-normalisation) and any actual SF API calls; both belong elsewhere.
+# MAGIC Compares what was **sent** in the composite request against the **current SF state**
+# MAGIC retrieved after the write, producing a field-level diff across all four object types.
 
 # COMMAND ----------
-
 # MAGIC %md
-# MAGIC ## 1. Imports and constants
+# MAGIC ## 1. Widgets, imports, constants
 
 # COMMAND ----------
 
+dbutils.widgets.text("catalog", "uc_comm_afl_dev", "catalog")
+dbutils.widgets.text("gld_schema", "brkrflw_gld", "gld_schema")
+dbutils.widgets.text("slr_schema", "brkrflw_slr", "slr_schema")
+dbutils.widgets.text("brz_schema", "brkrflw_brz", "brz_schema")
+dbutils.widgets.text("job_run_id", "718466553045729", "job_run_id")
+dbutils.widgets.dropdown("data_source", "gold", ["gold", "mock"], "data_source")
+dbutils.widgets.text("sf_server", "preprod.sandbox.my.salesforce.com", "sf_server")
+
+# COMMAND ----------
+
+import ast
 import copy
 import json
+import requests
 from typing import Any
 
 import pandas as pd
+from pyspark.sql import functions as F
+from simple_salesforce import Salesforce
 
-SF_API_VERSION = "v60.0"
+CATALOG     = dbutils.widgets.get("catalog")
+GLD_SCHEMA  = dbutils.widgets.get("gld_schema")
+SLR_SCHEMA  = dbutils.widgets.get("slr_schema")
+BRZ_SCHEMA  = dbutils.widgets.get("brz_schema")
+JOB_RUN_ID  = dbutils.widgets.get("job_run_id")
+DATA_SOURCE = dbutils.widgets.get("data_source")   # "gold" or "mock"
+SF_SERVER   = dbutils.widgets.get("sf_server")
+
+SF_API_VERSION = "v57.0"   # matches salesforce_composite_request_builder
+
+print(f"catalog: {CATALOG}, gld_schema: {GLD_SCHEMA}, job_run_id: {JOB_RUN_ID}, "
+      f"data_source: {DATA_SOURCE}, sf_server: {SF_SERVER}")
 
 # COMMAND ----------
-
 # MAGIC %md
-# MAGIC ## 2. The composite request we send to Salesforce
+# MAGIC ## 1b. Salesforce authentication
 # MAGIC
-# MAGIC Mirrors the structure of the JSON the pipeline POSTs to
-# MAGIC `/services/data/v60.0/composite/`. Account is created first; Opportunity is second with a
-# MAGIC `@{newAccount.id}` forward reference.
-# MAGIC
-# MAGIC The field list below was reconstructed from an OCR'd reference; cross-checked against
-# MAGIC the FieldDefinition CSVs Mithia shared but a couple of names still need pipeline-side
-# MAGIC confirmation (see the TODO under "field-name mismatches" further down).
+# MAGIC Credentials are stored in Azure Key Vault–backed Databricks secrets.
 
 # COMMAND ----------
 
-ACCOUNT_BODY = {
-    "RecordTypeId": "012A00000012ABCDEF",
-    "AccountSource": "Broker",
-    "Name": "Acme Logistics Ltd",
-    "Phone": "02012345678",
-    "clcommon__Legal_Entity_Type__c": "Private Limited Company",
-    "CB_Email__c": "info@acme-logistics.co.uk",
-    "CB_Company_Registration_Number__c": "12345678",
-    "CB_Customer_Type__c": "Limited Company",
-    "CB_Company_Status__c": "Active",
-    "BillingStreet": "123 High St",
-    "BillingCity": "London",
-    "BillingPostalCode": "EC1A 1BB",
-    "BillingCountry": "United Kingdom",
-    "BillingCountryCode": "GB",
-    "CB_RegisteredAddressStreet__c": "123 High St",
-    "CB_RegisteredAddressCity__c": "London",
-    "CB_RegisteredAddressPostalCode__c": "EC1A 1BB",
-    "ShippingStreet": "123 High St",
-    "ShippingCity": "London",
-    "ShippingPostalCode": "EC1A 1BB",
-    "ShippingCountry": "United Kingdom",
-    "ShippingCountryCode": "GB",
-}
+key    = dbutils.secrets.get(scope="ss_comm_afl_brkrflw", key="DATABRICKS-SALESFORCE-CONSUMER-KEY")
+secret = dbutils.secrets.get(scope="ss_comm_afl_brkrflw", key="DATABRICKS-SALESFORCE-CONSUMER-SECRET")
 
-OPPORTUNITY_BODY = {
-    "AccountId": "@{newAccount.id}",
-    "LeadSource": "Broker",
-    "CB_Partner_Account__c": "001A0000005XYZAB",
-    "CurrencyIsoCode": "GBP",
-    "CloseDate": "2026-08-15",
-    "Amount": 50000,
-    # TODO: confirm with the pipeline team — Mithia's tracking list has CB_Main_Product__c,
-    # not CB_Product__c. Either (a) the pipeline is writing to a deprecated/wrong field,
-    # (b) these are the same field under different names, or (c) they're genuinely different
-    # and one of them is unused. Until confirmed, see KNOWN_FIELD_MAPPINGS below for the
-    # candidate alias.
-    "CB_Product__c": "Hire Purchase",
-    "CB_Regulation__c": "Unregulated",
-    "CB_Term_Months__c": 36,
-    "CB_VAT_Deferral_Month__c": 3,
-    "CB_Deposit__c": 5000,
-    "CB_Underwriting_Decision_required_by__c": "2026-07-01",
-    "CB_Broker_Email_Received__c": "broker@finance.co.uk",
-    # Still unclear whether these are Boolean__c fields, a picklist value on Type, or
-    # something else entirely. They appeared at the end of the OCR'd source list with
-    # no surrounding context — confirm with the SF engineer.
-    "inbound": True,
-    "outbound": False,
-}
+session = requests.Session()
+# SF_SERVER widget is the full host, e.g. "preprod.sandbox.my.salesforce.com"
+# simple_salesforce wants just the domain portion before ".salesforce.com"
+domain = SF_SERVER.replace(".salesforce.com", "").replace(".my", ".my")
 
-COMPOSITE_REQUEST = {
+sf = Salesforce(
+    consumer_key=key,
+    consumer_secret=secret,
+    domain=domain,
+    session=session,
+)
+sf.session.timeout = 60
+print(sf)
+
+# COMMAND ----------
+# MAGIC %md
+# MAGIC ## 2. Load the composite request
+# MAGIC
+# MAGIC In **gold** mode, read `composite_request_outbound` for the given `JOB_RUN_ID`.
+# MAGIC In **mock** mode, use a synthetic payload that matches the real structure — useful
+# MAGIC when no Gold rows exist yet for the current job run.
+# MAGIC
+# MAGIC **Parsing note** — `salesforce_composite_request_builder` ends with:
+# MAGIC ```
+# MAGIC regexp_replace(COMPOSITE_JSON, '"allOrNone":true',  '"allOrNone":True')
+# MAGIC regexp_replace(COMPOSITE_JSON, '"Birthdate":null', '"Birthdate":None')
+# MAGIC ```
+# MAGIC so the column is Python-literal, not JSON. Use `ast.literal_eval`.
+
+# COMMAND ----------
+
+MOCK_COMPOSITE_REQUEST = {
     "allOrNone": True,
     "compositeRequest": [
         {
             "method": "POST",
             "url": f"/services/data/{SF_API_VERSION}/sobjects/Account",
-            "referenceId": "newAccount",
-            "body": ACCOUNT_BODY,
+            "referenceId": "refAccount_065afd694939d8cf",
+            "body": {
+                "RecordTypeId": "012A00000012ABCDEF",
+                "Name": "Acme Logistics Ltd",
+                "Phone": "02012345678",
+                "AccountSource": "Broker",
+                "CB_Email__c": "info@acme-logistics.co.uk",
+                "CB_Company_Registration_Number__c": "12345678",
+                "CB_Customer_Type__c": "Limited Company",
+                "CB_Company_Status__c": "Active",
+                "BillingStreet": "123 High St",
+                "BillingCity": "London",
+                "BillingPostalCode": "EC1A 1BB",
+                "BillingCountry": "United Kingdom",
+                "BillingCountryCode": "GB",
+                "ShippingStreet": "123 High St",
+                "ShippingCity": "London",
+                "ShippingPostalCode": "EC1A 1BB",
+                "ShippingCountry": "United Kingdom",
+                "ShippingCountryCode": "GB",
+            },
+        },
+        {
+            "method": "POST",
+            "url": f"/services/data/{SF_API_VERSION}/sobjects/Contact",
+            "referenceId": "refContact_a1b2c3d4",
+            "body": {
+                "AccountId": "@{refAccount_065afd694939d8cf.id}",
+                "FirstName": "John",
+                "LastName": "Smith",
+                "Email": "john.smith@acme-logistics.co.uk",
+                "Phone": "02012345679",
+                "Title": "Director",
+                "Birthdate": None,   # Python-literal None — see parsing note above
+                "LeadSource": "Broker",
+            },
         },
         {
             "method": "POST",
             "url": f"/services/data/{SF_API_VERSION}/sobjects/Opportunity",
-            "referenceId": "newOpportunity",
-            "body": OPPORTUNITY_BODY,
+            "referenceId": "refOpp",
+            "body": {
+                "AccountId": "@{refAccount_065afd694939d8cf.id}",
+                "RecordTypeId": "012A000000340PPXYZ",
+                "Name": "Acme Logistics Ltd-Excavator-50000-GBP-2026/06/15",
+                "StageName": "Submitted",
+                "CloseDate": "2026-08-15",
+                "Amount": 50000,
+                "CurrencyIsoCode": "GBP",
+                "CB_Main_Product__c": "Hire Purchase",
+                "CB_Term_Months__c": 36,
+                "CB_VAT_Deferral_Month__c": 3,
+                "CB_Deposit__c": 5000,
+                "CB_Partner_Account__c": "001A0000005XYZ4B",
+            },
+        },
+        {
+            "method": "POST",
+            "url": f"/services/data/{SF_API_VERSION}/sobjects/OpportunityContactRole",
+            "referenceId": "refOCR_B7e6d5c4b3a2918",
+            "body": {
+                "ContactId": "@{refContact_a1b2c3d4.id}",
+                "OpportunityId": "@{refOpp.id}",
+                "Role": "Director",
+            },
         },
     ],
 }
 
-print(json.dumps(COMPOSITE_REQUEST, indent=2, default=str)[:600], "...")
+
+def load_composite_request() -> tuple[dict, str]:
+    """Return (composite_request_dict, proposal_id) for the active job_run_id."""
+    if DATA_SOURCE == "mock":
+        print("Using MOCK composite request.")
+        return MOCK_COMPOSITE_REQUEST, "mock_proposal_id"
+
+    print(f"Loading from {CATALOG}.{GLD_SCHEMA}.composite_request_outbound "
+          f"where JOB_RUN_ID='{JOB_RUN_ID}'")
+    row = (
+        spark.table(f"{CATALOG}.{GLD_SCHEMA}.composite_request_outbound")
+        .filter(F.col("JOB_RUN_ID") == JOB_RUN_ID)
+        .select("PROPOSAL_ID", "COMPOSITE_JSON")
+        .limit(1)
+        .collect()
+    )
+    if not row:
+        raise ValueError(
+            f"No rows in composite_request_outbound for JOB_RUN_ID={JOB_RUN_ID}. "
+            "Set data_source=mock to develop without Gold data."
+        )
+    return ast.literal_eval(row[0]["COMPOSITE_JSON"]), row[0]["PROPOSAL_ID"]
+
+
+COMPOSITE_REQUEST, PROPOSAL_ID = load_composite_request()
+print(f"\nLoaded composite request for proposal_id={PROPOSAL_ID}")
+print(f"  allOrNone: {COMPOSITE_REQUEST['allOrNone']}")
+print(f"  items:     {len(COMPOSITE_REQUEST['compositeRequest'])}")
+for item in COMPOSITE_REQUEST["compositeRequest"]:
+    obj = item["url"].rsplit("/", 1)[-1]
+    print(f"    {obj:<30} referenceId={item['referenceId']}, "
+          f"{len(item['body'])} fields")
 
 # COMMAND ----------
-
 # MAGIC %md
-# MAGIC ## 3. Field-tracking config (NEW in v2)
+# MAGIC ## 3. Extract per-record bodies
 # MAGIC
-# MAGIC From the FieldDefinition CSVs Mithia shared. Each set is the Salesforce-side fields with
-# MAGIC `enableHistoryTracking = true`. Used downstream to annotate the diff with `tracking_status`,
-# MAGIC which determines what the change-type classifier can ask of `AccountHistory` /
-# MAGIC `OpportunityFieldHistory`.
-# MAGIC
-# MAGIC **Compound addresses** — `BillingAddress` / `ShippingAddress` / `MailingAddress` are tracked
-# MAGIC as single compound fields. Their components (Street, City, PostalCode, Country, CountryCode)
-# MAGIC are covered, but history is recorded at compound level: when the business edits BillingCity,
-# MAGIC `AccountHistory` will show one row for `BillingAddress` with a before/after blob.
-# MAGIC
-# MAGIC **Keep this list in sync** with what's actually enabled in Salesforce. The gap analysis
-# MAGIC spreadsheet lists the gaps; if Mithia enables tracking on additional fields, add them here.
-
-# COMMAND ----------
-
-TRACKED_FIELDS = {
-    "Account": {
-        # Standard
-        "Name", "RecordTypeId", "BillingAddress", "ShippingAddress", "Phone", "Website",
-        "Industry", "Description", "OwnerId", "PersonBirthdate", "AccountSource",
-        # Custom (CB_*, CL_*, etc.) — abridged for the fields we send; full list in gap analysis
-        "CB_Company_Registration_Number__c", "CB_Customer_Type__c", "CB_Company_Status__c",
-        "CB_Legal_Entity_Name__c",
-        # ... see sf_tracking_gap_analysis.xlsx for the full set
-    },
-    "Opportunity": {
-        "AccountId", "RecordTypeId", "Name", "StageName", "Amount", "CloseDate",
-        "NextStep", "OwnerId",
-        "CB_Partner_Account__c", "CB_Main_Product__c", "CB_Term_Months__c",
-        "CB_VAT_Deferral_Month__c", "CB_Deposit__c",
-        # ... see sf_tracking_gap_analysis.xlsx for the full set
-    },
-    "Contact": set(),  # tracked extensively in SF but the pipeline doesn't currently write Contacts
-}
-
-# Compound-address parents: when sending the component but querying tracking, we should treat
-# the component as "tracked via compound" rather than untracked.
-COMPOUND_PARENTS = {
-    "BillingStreet": "BillingAddress", "BillingCity": "BillingAddress",
-    "BillingPostalCode": "BillingAddress", "BillingCountry": "BillingAddress",
-    "BillingCountryCode": "BillingAddress", "BillingState": "BillingAddress",
-    "ShippingStreet": "ShippingAddress", "ShippingCity": "ShippingAddress",
-    "ShippingPostalCode": "ShippingAddress", "ShippingCountry": "ShippingAddress",
-    "ShippingCountryCode": "ShippingAddress", "ShippingState": "ShippingAddress",
-    "MailingStreet": "MailingAddress", "MailingCity": "MailingAddress",
-    "MailingPostalCode": "MailingAddress", "MailingCountry": "MailingAddress",
-    "MailingCountryCode": "MailingAddress", "MailingState": "MailingAddress",
-}
-
-
-def tracking_status(object_type: str, field: str) -> str:
-    """Return 'tracked' / 'compound' / 'untracked' for a given (object, field)."""
-    tracked = TRACKED_FIELDS.get(object_type, set())
-    if field in tracked:
-        return "tracked"
-    parent = COMPOUND_PARENTS.get(field)
-    if parent and parent in tracked:
-        return "compound"
-    return "untracked"
-
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ## 4. Helper — extract per-record bodies from the composite request
+# MAGIC The composite request has multiple Contacts and multiple OCRs in real data
+# MAGIC (one per person party, one per person/role pair). Keyed by `referenceId` so we
+# MAGIC can pair against the corresponding row in `salesforce_response`.
 
 # COMMAND ----------
 
 def extract_sent_records(composite_request: dict) -> dict[str, dict[str, Any]]:
-    """Pull each compositeRequest item out into {referenceId: {object_type, body}}."""
+    """Return {referenceId: {object_type, body}}."""
     out: dict[str, dict[str, Any]] = {}
     for item in composite_request["compositeRequest"]:
         url_parts = item["url"].rstrip("/").split("/")
@@ -209,169 +218,195 @@ def extract_sent_records(composite_request: dict) -> dict[str, dict[str, Any]]:
 
 
 sent_records = extract_sent_records(COMPOSITE_REQUEST)
+sent_by_object: dict[str, list[str]] = {}
 for ref_id, rec in sent_records.items():
-    print(f"  {ref_id} ({rec['object_type']}): {len(rec['body'])} fields")
+    sent_by_object.setdefault(rec["object_type"], []).append(ref_id)
+
+print("Sent records grouped by object type:")
+for obj, refs in sent_by_object.items():
+    print(f"  {obj}: {len(refs)} record(s) — {refs}")
 
 # COMMAND ----------
-
 # MAGIC %md
-# MAGIC ## 5. Mock the Salesforce response
+# MAGIC ## 4. POST composite request to Salesforce and capture write responses
 # MAGIC
-# MAGIC SOQL response shape:
-# MAGIC
-# MAGIC ```json
-# MAGIC {"totalSize": 1, "done": true, "records": [
-# MAGIC   {"attributes": {...}, "Id": "...", "<field>": "<value>", ...}
-# MAGIC ]}
-# MAGIC ```
-# MAGIC
-# MAGIC The mock applies realistic edits and adds standard SF system fields.
-# MAGIC
-# MAGIC **Replace this function with a real SOQL call when DEV access is wired in.** The
-# MAGIC downstream code only depends on the response shape.
+# MAGIC Replaces the previous mock section. POSTs the composite payload to the real
+# MAGIC Salesforce composite REST endpoint and returns `{referenceId: {sf_id, success,
+# MAGIC http_status, errors}}`.
 
 # COMMAND ----------
 
-# Edits that simulate what the business does during their Salesforce review.
-# At least one edit per tracking status — handy for end-to-end testing.
-ACCOUNT_EDITS = {
-    "BillingStreet": "123 High Street",                     # compound-tracked: history at BillingAddress level
-    "ShippingStreet": "123 High Street",                    # compound-tracked
-    "CB_RegisteredAddressStreet__c": "123 High Street",     # UNTRACKED — diff visible, no history
-    "Phone": "+44 20 1234 5678",                            # tracked
-    "CB_Email__c": "info@acmelogistics.co.uk",              # UNTRACKED
-}
+def call_salesforce_composite(composite_request: dict) -> dict:
+    """POST the composite request to Salesforce and return the raw response dict."""
+    try:
+        result = sf.restful(
+            "composite/",
+            method="POST",
+            data=json.dumps(composite_request),
+        )
+    except requests.exceptions.Timeout as e:
+        raise Exception(f"Salesforce session timed out: {str(e)}")
+    except (requests.exceptions.RequestException, KeyError) as e:
+        raise Exception(f"Salesforce request failed: {str(e)}")
 
-OPPORTUNITY_EDITS = {
-    "Amount": 52000,                                                # tracked
-    "CB_Broker_Email_Received__c": "broker.smith@finance.co.uk",    # UNTRACKED
-}
+    # Fail fast if any sub-request returned an error status
+    errors = []
+    for r in result.get("compositeResponse", []):
+        if r.get("httpStatusCode", 0) >= 400:
+            body = r.get("body", [])
+            if isinstance(body, dict):
+                body = body.get("errors", [body])
+            for e in body:
+                if isinstance(e, dict):
+                    errors.append(
+                        f"{r.get('referenceId')} [{r.get('httpStatusCode')}]: "
+                        f"{e.get('errorCode')}: {e.get('message')}"
+                    )
+                else:
+                    errors.append(
+                        f"{r.get('referenceId')} [{r.get('httpStatusCode')}]: {str(e)}"
+                    )
+
+    if errors:
+        error_message = "\n".join(errors)
+        raise Exception(f"Salesforce composite API failed:\n{error_message}")
+
+    return result
 
 
-def _fake_sf_id(object_type: str) -> str:
-    prefix = {"Account": "001", "Opportunity": "006", "Contact": "003"}.get(object_type, "000")
-    return f"{prefix}A0000005MOCK{object_type[:2].upper()}1"
+def load_salesforce_response() -> dict[str, dict[str, Any]]:
+    """POST composite request to real Salesforce and return
+    {referenceId: {sf_id, success, http_status, errors}}."""
+    print("POSTing composite request to Salesforce...")
+    result = call_salesforce_composite(COMPOSITE_REQUEST)
+    print(f"Received {len(result.get('compositeResponse', []))} sub-responses.")
+
+    responses = {}
+    for r in result.get("compositeResponse", []):
+        body = r.get("body") or {}
+        responses[r["referenceId"]] = {
+            "sf_id":        body.get("id") if isinstance(body, dict) else None,
+            "success":      body.get("success", False) if isinstance(body, dict) else False,
+            "http_status":  r.get("httpStatusCode"),
+            "errors":       body.get("errors", []) if isinstance(body, dict) else [],
+        }
+    return responses
 
 
-def mock_salesforce_response(
-    object_type: str,
-    sent_body: dict[str, Any],
-    edits: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    """Return a SOQL-shaped response containing one record that has been 'edited' in SF."""
-    edits = edits or {}
-    sf_id = _fake_sf_id(object_type)
+sf_write_responses = load_salesforce_response()
 
-    record = copy.deepcopy(sent_body)
-    if record.get("AccountId", "").startswith("@{"):
-        record["AccountId"] = _fake_sf_id("Account")
+failed = [r for r, v in sf_write_responses.items() if not v["success"]]
+if failed:
+    print(f"  WARNING — {len(failed)} write(s) failed: {failed}")
+print(f"Salesforce IDs resolved for {len(sf_write_responses)} referenceId(s).")
+for ref_id, v in sf_write_responses.items():
+    print(f"  {ref_id} -> {v['sf_id']} (HTTP {v['http_status']}, success={v['success']})")
 
-    for k, v in edits.items():
-        record[k] = v
+# COMMAND ----------
+# MAGIC %md
+# MAGIC ## 5. Fetch current SF state via GET
+# MAGIC
+# MAGIC Replaces the SOQL mock. For every successfully written record, GETs the current
+# MAGIC state from Salesforce using the SF ID returned by the composite write.
+# MAGIC The response shape matches what the previous `mock_soql_response` produced so
+# MAGIC all downstream diff logic is unchanged.
 
-    record = {
-        "attributes": {
-            "type": object_type,
-            "url": f"/services/data/{SF_API_VERSION}/sobjects/{object_type}/{sf_id}",
-        },
-        "Id": sf_id,
-        "CreatedDate": "2026-06-10T09:14:22.000+0000",
-        "CreatedById": "005A0000001USR01",
-        "LastModifiedDate": "2026-06-11T15:42:08.000+0000",
-        "LastModifiedById": "005A0000001BIZ02",
-        **record,
+# COMMAND ----------
+
+def get_sf_current_state(object_type: str, sf_id: str) -> dict[str, Any]:
+    """GET current field values for a Salesforce record."""
+    try:
+        raw = sf.restful(
+            f"sobjects/{object_type}/{sf_id}",
+            method="GET",
+        )
+    except Exception as e:
+        raise Exception(
+            f"Failed to GET {object_type}/{sf_id} from Salesforce: {str(e)}"
+        )
+    return raw
+
+
+# Build current_state_responses in the same shape as the old mock
+current_state_responses: dict[str, dict[str, Any]] = {}
+for ref_id, rec in sent_records.items():
+    if ref_id not in sf_write_responses:
+        print(f"  skipping {ref_id} — not in write responses")
+        continue
+    write_resp = sf_write_responses[ref_id]
+    if not write_resp["success"]:
+        print(f"  skipping {ref_id} — write was unsuccessful")
+        continue
+
+    sf_id = write_resp["sf_id"]
+    raw   = get_sf_current_state(rec["object_type"], sf_id)
+
+    current_state_responses[ref_id] = {
+        "totalSize": 1,
+        "done": True,
+        "records": [{
+            "attributes": {
+                "type": rec["object_type"],
+                "url": f"/services/data/{SF_API_VERSION}/sobjects/{rec['object_type']}/{sf_id}",
+            },
+            "Id": sf_id,
+            **raw,
+        }],
     }
 
-    return {"totalSize": 1, "done": True, "records": [record]}
-
-
-mock_responses = {
-    "newAccount": mock_salesforce_response("Account", ACCOUNT_BODY, ACCOUNT_EDITS),
-    "newOpportunity": mock_salesforce_response("Opportunity", OPPORTUNITY_BODY, OPPORTUNITY_EDITS),
-}
+print(f"Fetched current state for {len(current_state_responses)} record(s).")
 
 # COMMAND ----------
-
 # MAGIC %md
-# MAGIC ## 6. Unwrap responses → flat records
+# MAGIC ## 6. Unwrap and field-mapping seam
+# MAGIC
+# MAGIC `KNOWN_FIELD_MAPPINGS` is the seam where sent → received name aliases live.
+# MAGIC Currently empty pending pipeline-team confirmation on
+# MAGIC `CB_Product__c ↔ CB_Main_Product__c` (the v2 notebook's open question —
+# MAGIC and as the screenshots confirm, the real pipeline writes `CB_Main_Product__c`,
+# MAGIC so this v3 mock already uses the correct name).
 
 # COMMAND ----------
 
 SF_SYSTEM_FIELDS = {
-    "Id", "attributes", "CreatedDate", "CreatedById", "LastModifiedDate",
-    "LastModifiedById", "SystemModstamp", "IsDeleted", "OwnerId",
+    "Id", "attributes", "CreatedDate", "CreatedById",
+    "LastModifiedDate", "LastModifiedById", "SystemModstamp",
+    "IsDeleted", "OwnerId",
 }
 
+KNOWN_FIELD_MAPPINGS: dict[str, dict[str, str]] = {}
 
-def unwrap_soql_response(response: dict, expected_records: int = 1) -> dict[str, Any]:
+
+def unwrap_soql_response(response: dict, expected: int = 1) -> dict[str, Any]:
     records = response.get("records", [])
-    if len(records) != expected_records:
-        raise ValueError(f"Expected {expected_records} record(s), got {len(records)}")
+    if len(records) != expected:
+        raise ValueError(
+            f"Expected {expected} record(s), got {len(records)}"
+        )
     return records[0]
 
 
-def strip_system_fields(record: dict, keep_id: bool = True) -> dict[str, Any]:
-    keep = SF_SYSTEM_FIELDS - {"Id"} if keep_id else SF_SYSTEM_FIELDS
-    return {k: v for k, v in record.items() if k not in keep}
-
-
-received_records: dict[str, dict[str, Any]] = {}
-for ref_id, resp in mock_responses.items():
-    raw = unwrap_soql_response(resp)
-    received_records[ref_id] = {
-        "object_type": raw["attributes"]["type"],
-        "sf_id": raw["Id"],
-        "body": strip_system_fields(raw, keep_id=False),
-    }
-    print(f"  {ref_id} ({received_records[ref_id]['object_type']}): "
-          f"{len(received_records[ref_id]['body'])} fields, Id={received_records[ref_id]['sf_id']}")
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ## 7. Field-name mapping (sent ↔ received)
-# MAGIC
-# MAGIC Most fields are identity-mapped. Two known mismatches need pipeline-side confirmation:
-# MAGIC
-# MAGIC | Sent (pipeline)       | Salesforce-side candidate | Decision needed                                  |
-# MAGIC |-----------------------|---------------------------|--------------------------------------------------|
-# MAGIC | `CB_Product__c`       | `CB_Main_Product__c`      | Same field renamed, different field, or pipeline writing to a deprecated alias? |
-# MAGIC | `LeadSource` on Opp   | `LeadSource` on Contact   | Pipeline writes to Opportunity; SF tracks it on Contact. Where should it live? |
-# MAGIC
-# MAGIC Until confirmed, the mapping is **identity** — `CB_Product__c` will appear in the diff as
-# MAGIC `missing_in_response` (because SF doesn't have a field by that exact name). Surfacing the
-# MAGIC issue rather than silently aliasing.
-
-# COMMAND ----------
-
-KNOWN_FIELD_MAPPINGS: dict[str, dict[str, str]] = {
-    # Uncomment the candidate alias only after pipeline-team confirmation.
-    # "Opportunity": {
-    #     "CB_Product__c": "CB_Main_Product__c",
-    # },
-}
+def strip_system_fields(record: dict) -> dict[str, Any]:
+    return {k: v for k, v in record.items() if k not in SF_SYSTEM_FIELDS}
 
 
 def map_sent_to_received_keys(sent_body: dict, object_type: str) -> dict[str, str]:
-    """Return a {sent_field_name: received_field_name} mapping."""
     overrides = KNOWN_FIELD_MAPPINGS.get(object_type, {})
     return {k: overrides.get(k, k) for k in sent_body}
 
 # COMMAND ----------
-
 # MAGIC %md
-# MAGIC ## 8. The diff (now tracking-aware)
+# MAGIC ## 7. The diff — across all four object types
 # MAGIC
-# MAGIC Each row gets two annotations:
+# MAGIC One row per (referenceId, field). We diff **every field we sent** against the
+# MAGIC current SF state retrieved via GET — none of this is gated on history-tracking
+# MAGIC config. The output columns:
 # MAGIC
-# MAGIC | column | values | what it tells you |
-# MAGIC |---|---|---|
-# MAGIC | `status` | `unchanged` / `changed` / `missing_in_response` / `added_by_sf` / `composite_placeholder` | what the comparison found |
-# MAGIC | `tracking_status` | `tracked` / `compound` / `untracked` | whether SF will give us field history for this field |
-# MAGIC
-# MAGIC The intersection matters most: `(status='changed', tracking_status='tracked')` is the rich
-# MAGIC ground-truth signal. `(changed, untracked)` is still a usable diff but can't be enriched
-# MAGIC with who-changed-it-when later, so the change-type classifier has less to go on.
+# MAGIC | column | meaning |
+# MAGIC |--------|---------|
+# MAGIC | status | one of `unchanged / changed / missing_in_response / added_by_sf / composite_placeholder` |
+# MAGIC | changed | bool — True iff status == "changed". Use this to filter for ground-truth signal. |
+# MAGIC | before / after | values from sent payload vs current SF state |
 
 # COMMAND ----------
 
@@ -390,146 +425,87 @@ def diff_record(
     rows: list[dict[str, Any]] = []
     received_keys_referenced = set(mapping.values())
 
+    def _row(field, before, after, status):
+        return {
+            "proposal_id": PROPOSAL_ID,
+            "ref_id": ref_id,
+            "object_type": object_type,
+            "sf_id": sf_id,
+            "field": field,
+            "before": before,
+            "after": after,
+            "status": status,
+            "changed": status == "changed",
+        }
+
     for sent_key, recv_key in mapping.items():
         sent_val = sent_body[sent_key]
-        track = tracking_status(object_type, sent_key)
 
         if _is_placeholder(sent_val):
-            rows.append({
-                "ref_id": ref_id, "object_type": object_type, "sf_id": sf_id,
-                "field": sent_key, "before": sent_val, "after": received_body.get(recv_key),
-                "status": "composite_placeholder", "tracking_status": "n/a",
-            })
+            rows.append(_row(sent_key, sent_val,
+                             received_body.get(recv_key), "composite_placeholder"))
             continue
 
         if recv_key not in received_body:
-            rows.append({
-                "ref_id": ref_id, "object_type": object_type, "sf_id": sf_id,
-                "field": sent_key, "before": sent_val, "after": None,
-                "status": "missing_in_response", "tracking_status": track,
-            })
+            rows.append(_row(sent_key, sent_val, None, "missing_in_response"))
             continue
 
         recv_val = received_body[recv_key]
-        rows.append({
-            "ref_id": ref_id, "object_type": object_type, "sf_id": sf_id,
-            "field": sent_key, "before": sent_val, "after": recv_val,
-            "status": "unchanged" if sent_val == recv_val else "changed",
-            "tracking_status": track,
-        })
+        rows.append(_row(
+            sent_key, sent_val, recv_val,
+            "unchanged" if sent_val == recv_val else "changed",
+        ))
 
     for recv_key in received_body:
         if recv_key in received_keys_referenced:
             continue
-        rows.append({
-            "ref_id": ref_id, "object_type": object_type, "sf_id": sf_id,
-            "field": recv_key, "before": None, "after": received_body[recv_key],
-            "status": "added_by_sf", "tracking_status": tracking_status(object_type, recv_key),
-        })
+        rows.append(_row(recv_key, None, received_body[recv_key], "added_by_sf"))
 
     return rows
 
 
 all_rows: list[dict[str, Any]] = []
 for ref_id, sent in sent_records.items():
-    if ref_id not in received_records:
-        print(f"  ! {ref_id}: no response — skipping")
+    if ref_id not in current_state_responses:
+        print(f"  skipping {ref_id} ({sent['object_type']}) — no current state response "
+              "(write may have failed)")
         continue
-    recv = received_records[ref_id]
-    if sent["object_type"] != recv["object_type"]:
-        print(f"  ! {ref_id}: object_type mismatch — skipping")
-        continue
-    all_rows.extend(
-        diff_record(
-            sent_body=sent["body"],
-            received_body=recv["body"],
-            object_type=sent["object_type"],
-            ref_id=ref_id,
-            sf_id=recv["sf_id"],
-        )
-    )
+
+    raw           = unwrap_soql_response(current_state_responses[ref_id])
+    received_body = strip_system_fields(raw)
+    sf_id         = sf_write_responses[ref_id]["sf_id"]
+
+    all_rows.extend(diff_record(
+        sent_body=sent["body"],
+        received_body=received_body,
+        object_type=sent["object_type"],
+        ref_id=ref_id,
+        sf_id=sf_id,
+    ))
 
 diff_df = pd.DataFrame(all_rows)
 diff_df
 
 # COMMAND ----------
-
 # MAGIC %md
-# MAGIC ## 9. Summary — by object and by status × tracking
+# MAGIC ## 8. Summary views
 
 # COMMAND ----------
 
-summary_by_status = (
+# Status x object — overall shape of the diff
+print("=== STATUS x OBJECT ===")
+print(
     diff_df.groupby(["object_type", "status"], dropna=False)
     .size()
     .unstack(fill_value=0)
 )
-summary_by_status
 
 # COMMAND ----------
 
-# Status × tracking-status breakdown for the changed rows.
-# This is the table you'd take to a stand-up: how many changes have rich history available
-# vs how many are state-diff only.
-changed_breakdown = (
-    diff_df[diff_df["status"] == "changed"]
-    .groupby(["object_type", "tracking_status"], dropna=False)
-    .size()
-    .unstack(fill_value=0)
-)
-changed_breakdown
-
-# COMMAND ----------
-
-# Just the changed rows, with tracking annotation.
+# Just the changed rows — filter on the boolean for cleanliness
 changes_only = (
-    diff_df[diff_df["status"] == "changed"]
-    [["object_type", "field", "before", "after", "tracking_status"]]
+    diff_df[diff_df["changed"]]
+    [["object_type", "ref_id", "field", "before", "after"]]
     .reset_index(drop=True)
 )
 changes_only
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ## 10. What to swap when DEV access is live
-# MAGIC
-# MAGIC Three things change.
-# MAGIC
-# MAGIC **a) Section 5 — replace the mock with a real SOQL call.**
-# MAGIC ```python
-# MAGIC import requests
-# MAGIC
-# MAGIC def fetch_salesforce_record(object_type: str, sf_id: str, fields: list[str]) -> dict:
-# MAGIC     fields_csv = ",".join(fields)
-# MAGIC     query = f"SELECT {fields_csv} FROM {object_type} WHERE Id = '{sf_id}'"
-# MAGIC     url = f"{SF_BASE_URL}/services/data/{SF_API_VERSION}/query"
-# MAGIC     resp = requests.get(url, headers={"Authorization": f"Bearer {access_token}"}, params={"q": query})
-# MAGIC     resp.raise_for_status()
-# MAGIC     return resp.json()
-# MAGIC ```
-# MAGIC Reuse whatever auth helper the existing pipeline uses for its POSTs.
-# MAGIC
-# MAGIC **b) Section 3 — confirm and freeze `TRACKED_FIELDS`.**
-# MAGIC The lists here are seeded from the FieldDefinition CSVs. If Mithia enables tracking on
-# MAGIC additional fields to close the gap (see `sf_tracking_gap_analysis.xlsx`), add them here.
-# MAGIC The change-type classifier will read from this config when deciding which fields it can
-# MAGIC enrich with `AccountHistory` / `OpportunityFieldHistory` data.
-# MAGIC
-# MAGIC **c) Section 7 — resolve the field-name mismatches.**
-# MAGIC Get pipeline-team confirmation on:
-# MAGIC - `CB_Product__c` ↔ `CB_Main_Product__c`
-# MAGIC - `LeadSource` on Opportunity vs on Contact
-# MAGIC
-# MAGIC Then either populate `KNOWN_FIELD_MAPPINGS` (if it's an alias) or fix the pipeline (if it's
-# MAGIC writing to the wrong field).
-# MAGIC
-# MAGIC **Adjacent work, not in this notebook:**
-# MAGIC - **Change-type classifier.** Uses `tracking_status` from the diff above to decide which
-# MAGIC   changed rows to enrich with field-history data. Tracked rows get `who/when/why`
-# MAGIC   metadata from `AccountHistory`; untracked rows get the diff only.
-# MAGIC - **Trigger.** Per the business call, the snapshot moment is the opportunity transition to
-# MAGIC   `Originate`. That belongs in the pipeline orchestration, not here.
-# MAGIC - **Compound-address history parsing.** When `AccountHistory` returns a `BillingAddress`
-# MAGIC   change row, the old/new values are serialised compound objects. The classifier needs to
-# MAGIC   parse those out into component-level deltas to align with this diff.
